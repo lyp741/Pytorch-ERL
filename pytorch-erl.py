@@ -6,10 +6,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import random
 from collections import deque
+from proportional import Experience
 
 
-env = gym.make('InvertedDoublePendulum-v2')
-#env = gym.make('Pendulum-v0')
+env = gym.make('Ant-v2')
+# env = gym.make('Pendulum-v0')
 s_dim = env.observation_space.shape[0]
 a_max = env.action_space.high[0]
 a_min = env.action_space.low[0]
@@ -172,94 +173,6 @@ class Actor(nn.Module):
 
         return action
 
-
-
-
-# class Critic(nn.Module):
-
-# 	def __init__(self, state_dim, action_dim):
-# 		"""
-# 		:param state_dim: Dimension of input state (int)
-# 		:param action_dim: Dimension of input action (int)
-# 		:return:
-# 		"""
-# 		super(Critic, self).__init__()
-
-# 		self.state_dim = state_dim
-# 		self.action_dim = action_dim
-
-# 		self.fcs1 = nn.Linear(state_dim,400)
-# 		self.fcs1.weight.data = fanin_init(self.fcs1.weight.data.size())
-# 		self.fcs2 = nn.Linear(400,300)
-# 		self.fcs2.weight.data = fanin_init(self.fcs2.weight.data.size())
-
-# 		self.fca1 = nn.Linear(action_dim,300)
-# 		self.fca1.weight.data = fanin_init(self.fca1.weight.data.size())
-
-# 		self.fc1 = nn.Linear(300,1)
-# 		self.fc1.weight.data.uniform_(-EPS,EPS)
-
-# 	def forward(self, state, action):
-# 		"""
-# 		returns Value function Q(s,a) obtained from critic network
-# 		:param state: Input state (Torch Variable : [n,state_dim] )
-# 		:param action: Input ACriticction (Torch Variable : [n,action_dim] )
-# 		:return: Value function : Q(S,a) (Torch Variable : [n,1] )
-# 		"""
-# 		s1 = F.relu(self.fcs1(state))
-# 		s2 = F.relu(self.fcs2(s1))
-# 		a1 = F.relu(self.fca1(action))
-# 		x = s2 + a1
-
-        
-# 		x = self.fc1(x)
-
-# 		return x
-
-
-# class Actor(nn.Module):
-
-# 	def __init__(self, state_dim, action_dim, action_lim):
-# 		"""
-# 		:param state_dim: Dimension of input state (int)
-# 		:param action_dim: Dimension of output action (int)
-# 		:param action_lim: Used to limit action in [-action_lim,action_lim]
-# 		:return:
-# 		"""
-# 		super(Actor, self).__init__()
-
-# 		self.state_dim = state_dim
-# 		self.action_dim = action_dim
-# 		self.action_lim = torch.Tensor([action_lim])
-
-# 		self.fc1 = nn.Linear(state_dim,400)
-# 		self.fc1.weight.data = fanin_init(self.fc1.weight.data.size())
-
-# 		self.fc2 = nn.Linear(400,300)
-# 		self.fc2.weight.data = fanin_init(self.fc2.weight.data.size())
-
-# 		self.fc4 = nn.Linear(300,action_dim)
-# 		self.fc4.weight.data.uniform_(-EPS,EPS)
-
-# 	def forward(self, state):
-# 		"""
-# 		returns policy function Pi(s) obtained from actor network
-# 		this function is a gaussian prob distribution for all actions
-# 		with mean lying in (-1,1) and sigma lying in (0,1)
-# 		The sampled action can , then later be rescaled
-# 		:param state: Input state (Torch Variable : [n,state_dim] )
-# 		:return: Output action (Torch Variable: [n,action_dim] )
-# 		"""
-# 		x = F.relu(self.fc1(state))
-# 		x = F.relu(self.fc2(x))
-# 		action = F.tanh(self.fc4(x))
-
-# 		action = action * self.action_lim
-
-# 		return action
-
-
-
 def soft_update(target, source, tau):
     """
     Copies the parameters from source network (x) to target network (y) using the below update
@@ -315,7 +228,7 @@ class DDPG():
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(),1e-3)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(),1e-4)
         self.noise = OrnsteinUhlenbeckActionNoise(1)
-        self.buffer = MemoryBuffer(int(1e6))
+        self.buffer = Experience(int(1e6),batch_size,0.5)
         # if torch.cuda.is_available():
             # self.actor.cuda()
             # self.
@@ -336,10 +249,50 @@ class DDPG():
         #print(new_action)
         return new_action
 
+    def calculate_priority(self,data):
 
-    def evaluate(self):
+        # s1 = V(torch.unsqueeze(torch.Tensor(data[0]),0))
+        # a1 = V(torch.unsqueeze(torch.Tensor(data[1]),0))
+        # r1 = V(torch.unsqueeze(torch.Tensor([data[2]]),0))
+        # s2 = V(torch.unsqueeze(torch.Tensor(data[3]),0))
+        # #data = V(torch.Tensor(data))
+        # s1 = data[:,0]
+        # a1 = data[:,1]
+        # r1 = data[:,2]
+        # s2 = data[:,3]
+        s1 = [arr[0] for arr in data]
+        a1 = [arr[1] for arr in data]
+        r1 = [arr[2] for arr in data]
+        s2 = [arr[3] for arr in data]
+        s1 = V(torch.Tensor(s1))
+        a1 = V(torch.Tensor(a1))
+        r1 = V(torch.Tensor(r1))
+        s2 = V(torch.Tensor(s2))
+
+        a2 = self.target_actor.forward(s2).detach()
+        next_q = torch.squeeze(self.target_critic.forward(s2,a2).detach())
+        y_expected = torch.squeeze(r1) + gamma * next_q
+        y_predicted = torch.squeeze(self.critic.forward(s1,a1).detach())
+
+        # a2 = self.target_actor.forward(s2).detach()
+        # next_q = torch.squeeze(self.target_critic.forward(s2,a2).detach())
+        # y_expected = r1 + gamma * next_q
+        # y_predicted = torch.squeeze(self.critic.forward(s1,a1).detach())
+        #print(y_predicted)
+        TD_error = y_expected - y_predicted
+        # TD_error = torch.squeeze(TD_error)
+        
+        TD_error = abs(TD_error)
+        
+        return TD_error
+
+    def add_to_buffer(self,data):
+        priority = self.calculate_priority([data])
+        self.buffer.add(data,priority.item())
+
+    def evaluate(self,trials=1):
         total_steps = 0
-        for ep in range(1):
+        for ep in range(trials):
             obs = env.reset()
             print("episode",ep)
             done = False
@@ -353,16 +306,20 @@ class DDPG():
                 Reward += r
                 total_steps += 1
                 d = np.reshape(np.array(1.0 if done == True else 0.0, dtype=np.float32),(1,1))
-                self.buffer.add(obs,action,r,new_obs)
+                self.add_to_buffer([obs,action,[r],new_obs])
                 obs = new_obs
                 self.experience_replay()
             print("rl Reward:",Reward)
             self.actor.fitness = Reward
 
     def experience_replay(self):
-        if self.buffer.lens()<128:
+        if self.buffer.tree.filled_size()<batch_size:
             return
-        s1,a1,r1,s2 = self.buffer.sample(batch_size)
+        out, we, idxes = self.buffer.select(batch_size)
+        s1 = [arr[0] for arr in out]
+        a1 = [arr[1] for arr in out]
+        r1 = [arr[2] for arr in out]
+        s2 = [arr[3] for arr in out]
         s1 = V(torch.Tensor(s1))
         a1 = V(torch.Tensor(a1))
         r1 = V(torch.Tensor(r1))
@@ -371,9 +328,10 @@ class DDPG():
         #update critic
         a2 = self.target_actor.forward(s2).detach()
         next_q = torch.squeeze(self.target_critic.forward(s2,a2).detach())
-        y_expected = r1 + gamma * next_q
+        y_expected = torch.squeeze(r1) + gamma * next_q
         y_predicted = torch.squeeze(self.critic.forward(s1,a1))
-        #print(y_predicted)
+        # print(y_expected.shape)
+        
         loss_c = F.smooth_l1_loss(y_predicted,y_expected)
         self.critic_optimizer.zero_grad()
         loss_c.backward()
@@ -384,9 +342,13 @@ class DDPG():
         self.actor_optimizer.zero_grad()
         loss_a.backward()
         self.actor_optimizer.step()
-
         soft_update(self.target_actor,self.actor,tau)
         soft_update(self.target_critic,self.critic,tau)
+
+        #update priority
+        priority = self.calculate_priority(out)
+        priority = [arr.item() for arr in priority]
+        self.buffer.priority_update(idxes,priority)
 
 class ERL:
     def __init__(self):
@@ -429,7 +391,7 @@ class ERL:
                 new_obs, r, done, info = env.step(action)
                 fitness += r
                 d = np.reshape(np.array(1.0 if done == True else 0.0, dtype=np.float32),(1,1))
-                self.ddpg.buffer.add(obs,action,r,new_obs)
+                self.ddpg.add_to_buffer([obs,action,[r],new_obs])
                 obs = new_obs
             print("Times:",times,"Fitness:",fitness)
         return fitness/times
@@ -490,10 +452,10 @@ class ERL:
         self.indivisual[0].load_state_dict(torch.load('./Models/'+'1_actor.pt'))
 
 if __name__ == '__main__':
-    # ddpg = DDPG()
-    # ddpg.evaluate()
-    erl = ERL()
-    erl.train()
-    erl.save_models()
-    erl.load_models()
-    erl.evaluate(erl.indivisual[0],times=5,episode=80)
+    ddpg = DDPG()
+    ddpg.evaluate(2000)
+    # erl = ERL()
+    # erl.train()
+    # erl.save_models()
+    # erl.load_models()
+    # erl.evaluate(erl.indivisual[0],times=5,episode=80)
